@@ -24,7 +24,7 @@ from pdfminer.pdftypes import (
     resolve1,
     stream_value,
 )
-from pdfminer.psexceptions import PSEOF
+from pdfminer.psparser import PSEOF
 from pdfminer.psparser import (
     PSKeyword,
     keyword_name,

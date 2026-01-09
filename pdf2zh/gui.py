@@ -355,11 +355,11 @@ def translate_file(
 
 
 def babeldoc_translate_file(**kwargs):
-    from babeldoc.high_level import init as babeldoc_init
+    from babeldoc.format.pdf.high_level import init as babeldoc_init
 
     babeldoc_init()
-    from babeldoc.high_level import async_translate as babeldoc_translate
-    from babeldoc.translation_config import TranslationConfig as YadtConfig
+    from babeldoc.format.pdf.high_level import async_translate as babeldoc_translate
+    from babeldoc.format.pdf.translation_config import TranslationConfig as YadtConfig
 
     for translator in [
         GoogleTranslator,

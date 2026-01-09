@@ -16,7 +16,7 @@ import numpy as np
 import requests
 import tqdm
 from pdfminer.pdfdocument import PDFDocument
-from pdfminer.pdfexceptions import PDFValueError
+from pdfminer.pdftypes import PDFValueError
 from pdfminer.pdfinterp import PDFResourceManager
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfparser import PDFParser
