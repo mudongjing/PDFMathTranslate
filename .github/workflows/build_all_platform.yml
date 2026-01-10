@@ -1,0 +1,211 @@
+name: All Platform PyInstaller Release Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release Version (e.g., v1.0.0)'
+        required: true
+        type: string
+        default: v1.0.0
+  # push:
+  #   branches: [main] # debug时放开注释即可
+env:
+  # 全局版本统一管理
+  PYTHON_VERSION: "3.12.9"
+  # 项目核心配置
+  MAIN_ENTRY_FILE: "main.py" # 你的项目入口文件，按实际修改即可
+  APP_NAME: "pdf2zh"
+
+jobs:
+  # 全平台矩阵打包：一个Job完成 Win/Linux/macOS 打包
+  build-all-platform:
+    name: Build ${{ matrix.os }} - ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false # 一个系统打包失败，不影响其他系统
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            os_name: windows
+            ext: ".exe"
+          - os: ubuntu-latest
+            arch: x64
+            os_name: linux
+            ext: ""
+          - os: macos-latest
+            arch: arm64
+            os_name: macos-arm64
+            ext: ""
+          - os: macos-13
+            arch: x64
+            os_name: macos-x64
+            ext: ""
+
+    steps:
+      - name: Set PowerShell Execution Policy (Windows Only)
+        if: matrix.os == 'windows-latest'
+        run: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+        shell: pwsh
+
+      - name: checkout babeldoc metadata
+        uses: actions/checkout@v4
+        with:
+          repository: funstory-ai/BabelDOC
+          path: babeldoctemp1234567
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sparse-checkout: babeldoc/assets/embedding_assets_metadata.py
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Cached Assets
+        id: cache-assets
+        uses: actions/cache@v4.2.2
+        with:
+          path: ~/.cache/babeldoc
+          key: ${{ matrix.os }}-babeldoc-assets-${{ env.PYTHON_VERSION }}-${{ hashFiles('babeldoctemp1234567/babeldoc/assets/embedding_assets_metadata.py') }}
+          restore-keys: |
+            ${{ matrix.os }}-babeldoc-assets-${{ env.PYTHON_VERSION }}-
+            ${{ matrix.os }}-babeldoc-assets-
+
+      - name: 检出项目代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup uv with Python ${{ env.PYTHON_VERSION }}
+        uses: astral-sh/setup-uv@f94ec6bedd8674c4426838e6b50417d36b6ab231 # v5.3.1
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: 环境初始化 & 安装依赖 & 安装PyInstaller打包工具
+        shell: bash
+        run: |
+          # 删除临时目录
+          rm -rf ./babeldoctemp1234567 || true
+          # 创建构建目录
+          mkdir -p ./build ./dist
+          # 安装项目依赖 + PyInstaller + 依赖补全工具
+          uv pip install . --upgrade
+          uv pip install pyinstaller pywin32-ctypes # pywin32仅Windows生效，其他系统自动忽略
+          echo "✅ 依赖安装完成，PyInstaller已就绪"
+
+      - name: 生成BabelDOC离线资源
+        shell: bash
+        run: |
+          uv run babeldoc --generate-offline-assets ./build
+          echo "✅ 离线资源包生成完成"
+
+      - name: PyInstaller 核心打包（全平台最优参数，重中之重）
+        shell: bash
+        run: |
+          # 拼接最终产物名称：pdf2zh-windows-v1.0.0.exe / pdf2zh-linux-v1.0.0 等
+          OUTPUT_NAME="${{ env.APP_NAME }}-${{ matrix.os_name }}-${{ github.event.inputs.release_version }}${{ matrix.ext }}"
+          # PyInstaller 终极打包命令 - 适配你的项目+全平台+最优配置
+          pyinstaller \
+            --onefile \
+            --noconsole \
+            --name "${OUTPUT_NAME}" \
+            --distpath ./dist \
+            --workpath ./build/pyinstaller_build \
+            --specpath ./build \
+            --clean \
+            --optimize=2 \
+            --exclude-module=tkinter \
+            --exclude-module=matplotlib \
+            --hidden-import=babeldoc \
+            --hidden-import=babeldoc.assets \
+            --hidden-import=pdfminer \
+            --hidden-import=pdfminer.pdfinterp \
+            --add-data="./build/offline_assets_*:." \
+            --add-data="./script/*:script/" \
+            ${{ env.MAIN_ENTRY_FILE }}
+          # 打包完成后清理冗余文件
+          rm -rf ./build/pyinstaller_build || true
+          echo "✅ PyInstaller打包完成，产物路径: ./dist/${OUTPUT_NAME}"
+
+      - name: 上传全平台打包产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-build-${{ matrix.os_name }}-${{ github.event.inputs.release_version }}
+          path: ./dist/*
+          if-no-files-found: error
+          compression-level: 9
+          include-hidden-files: true
+
+  # 全平台自动化测试：依赖打包完成后，分别测试Win/Linux/macOS产物
+  test-all-platform:
+    name: Test ${{ matrix.os }} - ${{ matrix.arch }}
+    needs: build-all-platform
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            os_name: windows
+            ext: ".exe"
+            shell: pwsh
+          - os: ubuntu-latest
+            arch: x64
+            os_name: linux
+            ext: ""
+            shell: bash
+          - os: macos-latest
+            arch: arm64
+            os_name: macos-arm64
+            ext: ""
+            shell: bash
+
+    steps:
+      - name: 检出测试代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 下载对应平台的打包产物
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-build-${{ matrix.os_name }}-${{ github.event.inputs.release_version }}
+          path: ./dist
+
+      - name: 赋予执行权限 (Linux/macOS Only)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: chmod +x ./dist/*
+
+      - name: 测试1 - 查看版本号
+        shell: ${{ matrix.shell }}
+        run: |
+          ./dist/*${{ matrix.ext }} --version
+
+      - name: 测试2 - 翻译纯文本PDF
+        shell: ${{ matrix.shell }}
+        run: |
+          ./dist/*${{ matrix.ext }} ./test/file/translate.cli.plain.text.pdf -o ./test/file
+
+      - name: 测试3 - 翻译带图片PDF
+        shell: ${{ matrix.shell }}
+        run: |
+          ./dist/*${{ matrix.ext }} ./test/file/translate.cli.text.with.figure.pdf -o ./test/file
+
+      - name: 清理离线资源+缓存后回归测试
+        shell: ${{ matrix.shell }}
+        run: |
+          # 删除离线资源包
+          rm -rf ./dist/offline_assets_* || true
+          # 删除缓存目录
+          rm -rf ~/.cache/babeldoc || true
+          # 无离线资源的情况下再次测试翻译
+          ./dist/*${{ matrix.ext }} ./test/file/translate.cli.plain.text.pdf -o ./test/file
+
+      - name: 上传测试结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os_name }}
+          path: ./test/file/
+          compression-level: 9
