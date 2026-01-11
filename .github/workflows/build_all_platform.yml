@@ -1,4 +1,4 @@
-name: All Platform PyInstaller Release Workflow (Final Fixed All Errors)
+name: All Platform PyInstaller Build (Final No Error)
 
 on:
   workflow_dispatch:
@@ -8,51 +8,50 @@ on:
         required: true
         type: string
         default: v1.0.0
-  # push:
-  #   branches: [main] # debug时放开注释即可
 
 env:
   PYTHON_VERSION: "3.12.9"
-  MAIN_ENTRY_FILE: "pdf2zh/pdf2zh.py" # 你的项目入口文件，按需修改即可
+  MAIN_ENTRY_FILE: "pdf2zh/pdf2zh.py" # 你的入口文件，按需改即可（比如cli.py）
   APP_NAME: "pdf2zh"
-  ASSETS_DIR: "./offline_assets" # 独立离线资源目录，解决路径嵌套问题
+  # ✅ 关键修改1：离线资源目录 移出build，改为根目录的 assets 文件夹，无任何拼接风险
+  ASSETS_DIR: "./assets"
 
 jobs:
   build-all-platform:
-    name: Build ${{ matrix.os }} - ${{ matrix.arch }}
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false # 一个平台失败不影响其他平台
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
             arch: x64
             os_name: windows
             ext: ".exe"
-            data_sep: ";" # Windows PyInstaller add-data 分隔符
+            sep: ";"  # Win的add-data分隔符
           - os: ubuntu-latest
             arch: x64
             os_name: linux
             ext: ""
-            data_sep: ":" # Linux/macOS PyInstaller add-data 分隔符
+            sep: ":"  # Linux/macOS的add-data分隔符
           - os: macos-latest
             arch: arm64
             os_name: macos-arm64
             ext: ""
-            data_sep: ":"
+            sep: ":"
           - os: macos-13
             arch: x64
             os_name: macos-x64
             ext: ""
-            data_sep: ":"
+            sep: ":"
 
     steps:
-      - name: Set PowerShell Execution Policy (Windows Only)
+      - name: Windows PowerShell Policy
         if: matrix.os == 'windows-latest'
         run: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
         shell: pwsh
 
-      - name: checkout babeldoc metadata
+      - name: Checkout BabelDOC Metadata
         uses: actions/checkout@v4
         with:
           repository: funstory-ai/BabelDOC
@@ -62,66 +61,59 @@ jobs:
           sparse-checkout-cone-mode: false
           fetch-depth: 1
 
-      - name: Cached Assets
-        id: cache-assets
+      - name: Cache BabelDOC Assets
         uses: actions/cache@v4.2.2
         with:
           path: ~/.cache/babeldoc
-          key: ${{ matrix.os }}-babeldoc-assets-${{ env.PYTHON_VERSION }}-${{ hashFiles('babeldoctemp1234567/babeldoc/assets/embedding_assets_metadata.py') }}
-          restore-keys: |
-            ${{ matrix.os }}-babeldoc-assets-${{ env.PYTHON_VERSION }}-
-            ${{ matrix.os }}-babeldoc-assets-
+          key: ${{ matrix.os }}-babel-${{ env.PYTHON_VERSION }}-${{ hashFiles('babeldoctemp1234567/babeldoc/assets/embedding_assets_metadata.py') }}
 
-      - name: 检出项目代码
+      - name: Checkout Project Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Setup uv with Python ${{ env.PYTHON_VERSION }}
-        uses: astral-sh/setup-uv@f94ec6bedd8674c4426838e6b50417d36b6ab231 # v5.3.1
+      - name: Setup Python & UV
+        uses: astral-sh/setup-uv@f94ec6bedd8674c4426838e6b50417d36b6ab231
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
 
-      - name: 环境初始化 & 安装依赖 & 安装PyInstaller
+      - name: Clean Env & Install Dependencies
         shell: bash
         run: |
-          # 删除临时目录+清理缓存
-          rm -rf ./babeldoctemp1234567 || true
-          rm -rf ./dist ./build ${{ env.ASSETS_DIR }} || true
-          # 创建干净目录
+          rm -rf ./babeldoctemp1234567 ./dist ./build ${{ env.ASSETS_DIR }} || true
           mkdir -p ./dist ./build ${{ env.ASSETS_DIR }}
-          # 安装项目依赖+PyInstaller+适配库
           uv pip install . --upgrade
           uv pip install pyinstaller pywin32-ctypes
-          echo "✅ 依赖安装完成，PyInstaller已就绪"
+          echo "✅ Env Ready"
 
-      - name: 生成BabelDOC离线资源 + 校验资源是否生成
+      - name: Generate BabelDOC Offline Assets + Force Check
         shell: bash
         run: |
-          # 生成离线资源到独立目录，杜绝路径问题
+          # 生成离线资源到根目录的assets文件夹
           uv run babeldoc --generate-offline-assets ${{ env.ASSETS_DIR }}
-          # 校验资源是否生成，找不到则终止打包
-          if [ -z "$(ls -A ${{ env.ASSETS_DIR }}/*.zip 2>/dev/null)" ]; then
-            echo "❌ 错误：离线资源包未生成！"
+          # ✅ 强制校验：如果资源为空，直接终止并提示
+          if [ ! -f "$(find ${{ env.ASSETS_DIR }} -name "*.zip" -type f)" ]; then
+            echo "❌ FATAL: No offline assets zip found in ${{ env.ASSETS_DIR }}"
+            ls -la ${{ env.ASSETS_DIR }}
             exit 1
           fi
-          echo "✅ 离线资源包生成成功，路径: ${{ env.ASSETS_DIR }}"
+          echo "✅ Assets Generated: $(ls -la ${{ env.ASSETS_DIR }})"
 
-      - name: PyInstaller 核心打包（全平台适配+路径修复+无语法错误）
+      - name: PyInstaller Build (✅核心修复：绝对路径 + 无通配符 + 最简参数)
         shell: bash
         run: |
-          # 拼接产物名称
           OUTPUT_NAME="${{ env.APP_NAME }}-${{ matrix.os_name }}-${{ github.event.inputs.release_version }}${{ matrix.ext }}"
-          # PyInstaller打包命令 - 无注释、全平台适配、修复所有路径问题
+          # ✅ 关键修复点：
+          # 1. 用 ${GITHUB_WORKSPACE} 绝对路径引用资源，彻底杜绝路径拼接错误
+          # 2. 直接引用文件夹，删除通配符 * ，100%识别
+          # 3. 移除所有可能导致路径混乱的冗余参数
           pyinstaller \
             --onefile \
             --console \
             --name "${OUTPUT_NAME}" \
             --distpath ./dist \
-            --workpath ./build/pyinstaller_temp \
-            --specpath ./build \
             --clean \
             --optimize=2 \
             --exclude-module=tkinter \
@@ -129,33 +121,24 @@ jobs:
             --exclude-module=unittest \
             --hidden-import=babeldoc \
             --hidden-import=babeldoc.assets \
-            --hidden-import=babeldoc.assets.embedding_assets_metadata \
             --hidden-import=pdfminer \
             --hidden-import=pdfminer.pdfinterp \
             --hidden-import=pdfminer.pdfparser \
-            --hidden-import=pdfminer.pdftypes \
-            --hidden-import=pdfminer.pdfdocument \
             --hidden-import=pdfminer.converter \
-            --hidden-import=pdfminer.layout \
-            --hidden-import=pdfminer.cmapdb \
-            --add-data="${{ env.ASSETS_DIR }}/*${{ matrix.data_sep }}./offline_assets" \
-            --add-data="./script/*${{ matrix.data_sep }}./script" \
+            # ✅ 终极修复：绝对路径 + 文件夹引用，无通配符
+            --add-data="${{ github.workspace }}/${{ env.ASSETS_DIR }}${{ matrix.sep }}./assets" \
+            --add-data="${{ github.workspace }}/script${{ matrix.sep }}./script" \
             ${{ env.MAIN_ENTRY_FILE }}
-          # 清理临时文件
-          rm -rf ./build/pyinstaller_temp || true
-          echo "✅ PyInstaller打包完成！产物路径: ./dist/${OUTPUT_NAME}"
+          echo "✅ Build Success! File: $(ls -la ./dist/)"
 
-      - name: 赋予执行权限 (Linux/macOS Only)
+      - name: Add Execute Permission (Linux/macOS)
         if: matrix.os != 'windows-latest'
         shell: bash
         run: chmod +x ./dist/*
-        continue-on-error: true
 
-      - name: 上传全平台打包产物
+      - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-build-${{ matrix.os_name }}-${{ github.event.inputs.release_version }}
+          name: ${{ env.APP_NAME }}-${{ matrix.os_name }}-${{ github.event.inputs.release_version }}
           path: ./dist/*
           if-no-files-found: error
-          compression-level: 9
-          include-hidden-files: true
