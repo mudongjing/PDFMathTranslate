@@ -1,4 +1,4 @@
-name: All Platform PyInstaller Release Workflow (Fixed All Errors)
+name: All Platform PyInstaller Release Workflow (Final Fixed All Errors)
 
 on:
   workflow_dispatch:
@@ -9,46 +9,42 @@ on:
         type: string
         default: v1.0.0
   # push:
-  #   branches: [main] # debug时放开注释
+  #   branches: [main] # debug时放开注释即可
 
 env:
   PYTHON_VERSION: "3.12.9"
   MAIN_ENTRY_FILE: "pdf2zh/pdf2zh.py" # 你的项目入口文件，按需修改即可
   APP_NAME: "pdf2zh"
-  ASSETS_DIR: "./offline_assets" # 统一离线资源目录，解决路径混乱
+  ASSETS_DIR: "./offline_assets" # 独立离线资源目录，解决路径嵌套问题
 
 jobs:
   build-all-platform:
     name: Build ${{ matrix.os }} - ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      fail-fast: false # 一个平台失败不影响其他平台
       matrix:
         include:
           - os: windows-latest
             arch: x64
             os_name: windows
             ext: ".exe"
-            data_sep: ";" # Windows下PyInstaller的add-data分隔符
-            shell: pwsh
+            data_sep: ";" # Windows PyInstaller add-data 分隔符
           - os: ubuntu-latest
             arch: x64
             os_name: linux
             ext: ""
-            data_sep: ":" # Linux/macOS下PyInstaller的add-data分隔符
-            shell: bash
+            data_sep: ":" # Linux/macOS PyInstaller add-data 分隔符
           - os: macos-latest
             arch: arm64
             os_name: macos-arm64
             ext: ""
             data_sep: ":"
-            shell: bash
           - os: macos-13
             arch: x64
             os_name: macos-x64
             ext: ""
             data_sep: ":"
-            shell: bash
 
     steps:
       - name: Set PowerShell Execution Policy (Windows Only)
@@ -89,39 +85,39 @@ jobs:
           cache-dependency-glob: "pyproject.toml"
 
       - name: 环境初始化 & 安装依赖 & 安装PyInstaller
-        shell: ${{ matrix.shell }}
+        shell: bash
         run: |
           # 删除临时目录+清理缓存
-          rm -rf ./babeldoctemp1234567 || Remove-Item -Path ./babeldoctemp1234567 -Recurse -Force -ErrorAction SilentlyContinue
-          rm -rf ./dist ./build ${{ env.ASSETS_DIR }} || Remove-Item -Path ./dist,./build,${{ env.ASSETS_DIR }} -Recurse -Force -ErrorAction SilentlyContinue
+          rm -rf ./babeldoctemp1234567 || true
+          rm -rf ./dist ./build ${{ env.ASSETS_DIR }} || true
           # 创建干净目录
           mkdir -p ./dist ./build ${{ env.ASSETS_DIR }}
           # 安装项目依赖+PyInstaller+适配库
           uv pip install . --upgrade
-          uv pip install pyinstaller pywin32-ctypes # pywin32仅Windows生效，其他系统自动忽略
-          echo "✅ 依赖安装完成"
+          uv pip install pyinstaller pywin32-ctypes
+          echo "✅ 依赖安装完成，PyInstaller已就绪"
 
-      - name: 生成BabelDOC离线资源 + 校验资源是否生成（核心修复）
-        shell: ${{ matrix.shell }}
+      - name: 生成BabelDOC离线资源 + 校验资源是否生成
+        shell: bash
         run: |
-          # 生成离线资源到统一目录，避免路径嵌套
+          # 生成离线资源到独立目录，杜绝路径问题
           uv run babeldoc --generate-offline-assets ${{ env.ASSETS_DIR }}
-          # 校验资源是否生成，找不到则直接报错，提前终止
+          # 校验资源是否生成，找不到则终止打包
           if [ -z "$(ls -A ${{ env.ASSETS_DIR }}/*.zip 2>/dev/null)" ]; then
             echo "❌ 错误：离线资源包未生成！"
             exit 1
           fi
           echo "✅ 离线资源包生成成功，路径: ${{ env.ASSETS_DIR }}"
 
-      - name: PyInstaller 核心打包（全平台适配+路径修复+最优参数）
-        shell: ${{ matrix.shell }}
+      - name: PyInstaller 核心打包（全平台适配+路径修复+无语法错误）
+        shell: bash
         run: |
           # 拼接产物名称
           OUTPUT_NAME="${{ env.APP_NAME }}-${{ matrix.os_name }}-${{ github.event.inputs.release_version }}${{ matrix.ext }}"
-          # 核心打包命令 - 修复所有路径+语法问题，适配你的项目
+          # PyInstaller打包命令 - 无注释、全平台适配、修复所有路径问题
           pyinstaller \
             --onefile \
-            --console \ # 必用！你的是命令行工具，必须开启控制台，否则无输出+运行报错
+            --console \
             --name "${OUTPUT_NAME}" \
             --distpath ./dist \
             --workpath ./build/pyinstaller_temp \
@@ -131,7 +127,6 @@ jobs:
             --exclude-module=tkinter \
             --exclude-module=matplotlib \
             --exclude-module=unittest \
-            # 你的项目核心隐式依赖，全部补全，避免运行时报ModuleNotFoundError
             --hidden-import=babeldoc \
             --hidden-import=babeldoc.assets \
             --hidden-import=babeldoc.assets.embedding_assets_metadata \
@@ -143,7 +138,6 @@ jobs:
             --hidden-import=pdfminer.converter \
             --hidden-import=pdfminer.layout \
             --hidden-import=pdfminer.cmapdb \
-            # 修复核心问题：离线资源+script目录的路径配置，全平台语法兼容
             --add-data="${{ env.ASSETS_DIR }}/*${{ matrix.data_sep }}./offline_assets" \
             --add-data="./script/*${{ matrix.data_sep }}./script" \
             ${{ env.MAIN_ENTRY_FILE }}
