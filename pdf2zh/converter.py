@@ -15,31 +15,12 @@ from pdfminer.utils import apply_matrix_pt, mult_matrix
 from pymupdf import Font
 from tenacity import retry, wait_fixed
 
-from pdf2zh.translator import (
-    AnythingLLMTranslator,
-    ArgosTranslator,
-    AzureOpenAITranslator,
-    AzureTranslator,
+from pdf2zh.translator import (    
     BaseTranslator,
     BingTranslator,
-    DeepLTranslator,
-    DeepLXTranslator,
-    DeepseekTranslator,
-    DifyTranslator,
-    GeminiTranslator,
     GoogleTranslator,
-    GrokTranslator,
-    GroqTranslator,
-    ModelScopeTranslator,
-    OllamaTranslator,
     OpenAIlikedTranslator,
     OpenAITranslator,
-    QwenMtTranslator,
-    SiliconTranslator,
-    TencentTranslator,
-    XinferenceTranslator,
-    ZhipuTranslator,
-    X302AITranslator,
 )
 
 log = logging.getLogger(__name__)
@@ -159,8 +140,7 @@ class TranslateConverter(PDFConverterEx):
         service_model = param[1] if len(param) > 1 else None
         if not envs:
             envs = {}
-        for translator in [GoogleTranslator, BingTranslator, DeepLTranslator, DeepLXTranslator, OllamaTranslator, XinferenceTranslator, AzureOpenAITranslator,
-                           OpenAITranslator, ZhipuTranslator, ModelScopeTranslator, SiliconTranslator, GeminiTranslator, AzureTranslator, TencentTranslator, DifyTranslator, AnythingLLMTranslator, ArgosTranslator, GrokTranslator, GroqTranslator, DeepseekTranslator, OpenAIlikedTranslator, QwenMtTranslator, X302AITranslator]:
+        for translator in [GoogleTranslator, BingTranslator, OpenAITranslator,  OpenAIlikedTranslator]:
             if service_name == translator.name:
                 self.translator = translator(lang_in, lang_out, service_model, envs=envs, prompt=prompt, ignore_cache=ignore_cache)
         if not self.translator:
